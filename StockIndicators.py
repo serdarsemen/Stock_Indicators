@@ -609,28 +609,6 @@ def ao(high, low, fast=5, slow=34):
     ao = fastsma - slowsma
     return ao
 
-def mfi(high, low, close, volume, period=14):
-    """
-    Calculates the Money Flow Index (MFI).
-
-    Args:
-    high (pd.Series): High prices.
-    low (pd.Series): Low prices.
-    close (pd.Series): Close prices.
-    volume (pd.Series): Volume.
-    period (int, optional): The period over which to calculate MFI. Default is 14.
-
-    Returns:
-    pd.Series: The Money Flow Index values.
-    """
-    typical_price = hlc3(high, low, close)
-    raw_money_flow = typical_price * volume
-    positive_flow = (raw_money_flow * (typical_price > typical_price.shift(1))).rolling(window=period).sum()
-    negative_flow = (raw_money_flow * (typical_price < typical_price.shift(1))).rolling(window=period).sum()
-    money_flow_ratio = positive_flow / negative_flow
-    mfi = 100 - (100 / (1 + money_flow_ratio))
-    return mfi
-
 def ewo(series, short_period=5, long_period=34):
     """
     Calculate Elliott Wave Oscillator (EWO)
@@ -677,6 +655,126 @@ def dss_bresser_scalper(high, low, close, ema_period=8, stoc_period=13):
     dssbuffer = DSS.ewm(alpha=smooth_coeff).mean()
     
     return dssbuffer
+
+def bcwsma(series, length, multiplier):
+    """
+    Calculate the smoothed moving average (BCWSMA).
+
+    Args:
+    series (pd.Series): The input series to be smoothed.
+    length (int): The length of the smoothing period.
+    multiplier (int): The multiplier used in the smoothing formula.
+
+    Returns:
+    pd.Series: The smoothed moving average series.
+    """
+    bcwsma_series = pd.Series(index=series.index, dtype=float)
+    first_valid_index = series.first_valid_index()
+    
+    if first_valid_index is not None:
+        bcwsma_series.iloc[first_valid_index] = series.iloc[first_valid_index]
+        for i in range(first_valid_index + 1, len(series)):
+            if pd.isna(series.iloc[i]):
+                bcwsma_series.iloc[i] = bcwsma_series.iloc[i-1]
+            else:
+                bcwsma_series.iloc[i] = (multiplier * series.iloc[i] + (length - multiplier) * bcwsma_series.iloc[i-1]) / length
+    return bcwsma_series
+
+def kdj_indicator(high, low, close, ilong=9, isig=3):
+    """
+    Calculate the KDJ indicator.
+
+    Args:
+    high (pd.Series): The high prices series.
+    low (pd.Series): The low prices series.
+    close (pd.Series): The close prices series.
+    ilong (int): The period length for the KDJ indicator calculation.
+    isig (int): The signal period length for the KDJ indicator calculation.
+
+    Returns:
+    pd.Series: The KDJ indicator series.
+    """
+    c = close
+    h = high.rolling(ilong).max()
+    low= low.rolling(ilong).min()
+    rsv = 100 * ((c - low) / (h - low))
+    pk = bcwsma(rsv, isig, 1)
+    pd = bcwsma(pk, isig, 1)
+    pj = 3 * pk - 2 * pd
+    kdj = pj - pd
+    return kdj
+
+def TKE(data, period=14, emaperiod=5, novolumedata=False):
+    """
+    Calculate Technical Knowledge Extract (TKE) score based on multiple technical indicators.
+
+    Parameters:
+    - data (DataFrame): Input data containing 'close', 'high', 'low', 'volume' columns.
+    - period (int): Period parameter used for calculating various indicators.
+    - emaperiod (int): EMA period parameter (currently not used in the function).
+    - novolumedata (bool): Flag to exclude volume-based indicators if True.
+
+    Returns:
+    - tke (Series): Series containing the calculated TKE scores.
+    """
+    df = data.copy()
+
+    # Calculate various technical indicators
+    mom_ = (df['close'] / df['close'].shift(period)) * 100
+    cci_ = cci(df['high'], df['low'], df['close'], period)
+    rsi_ = rsi(df['close'], period)
+    willr_ = williams_r(df['high'], df['low'], df['close'], period)
+    stoch_ = stochastic(df['high'], df['low'], df['close'], period)
+    
+    if novolumedata:
+        # Exclude volume-based indicators
+        tke = (cci_ + rsi_ + willr_ + stoch_) / 4
+    else:
+        # Include volume-based indicators
+        mfi_ = mfi(df['high'], df['low'], df['close'], df['volume'], period)
+        ultimate_ = ultimate_oscillator(df['high'], df['low'], df['close'], 7, 14, 28)
+        tke = (ultimate_ + mfi_ + mom_ + cci_ + rsi_ + willr_ + stoch_) / 7
+    
+    return tke
+
+def TrendMagic(high, low, close, cci_period, atr_mult, atr_period):
+    """
+    Calculate the Trend Magic indicator based on given parameters.
+
+    Parameters:
+    high (np.array): High prices.
+    low (np.array): Low prices.
+    close (np.array): Close prices.
+    cci_period (int): Period for calculating CCI.
+    atr_mult (float): Multiplier for ATR.
+    atr_period (int): Period for calculating ATR.
+
+    Returns:
+    np.array: Trend Magic values.
+    """
+    true_range = tr(high, low, close)  # Calculate True Range
+    cci_ = cci(high, low, close, cci_period)  # Calculate CCI
+    atr_ = sma(true_range, atr_period)  # Calculate ATR
+    
+    upT = low - atr_mult * atr_
+    downT = high + atr_mult * atr_
+    
+    MagicTrend = np.zeros_like(close)
+    first_valid_index = max(cci_period, atr_period)
+    
+    for i in range(first_valid_index, len(close)):
+        if cci_[i] >= 0:
+            if upT[i] < MagicTrend[i-1]:
+                MagicTrend[i] = MagicTrend[i-1]
+            else:
+                MagicTrend[i] = upT[i]
+        else:
+            if downT[i] > MagicTrend[i-1]:
+                MagicTrend[i] = MagicTrend[i-1]
+            else:
+                MagicTrend[i] = downT[i]
+
+    return MagicTrend
 
 #Return Dataframes
 def bollinger_bands(series, length=20, std_multiplier=2):
@@ -752,6 +850,30 @@ def nadaraya_watson_envelope(data, bandwidth, mult=3.0):
     
     return df
 
+def stochastic(high, low, close, length=14):
+    """
+    Calculate the Stochastic Oscillator.
+
+    Parameters:
+    high (pd.Series): High prices
+    low (pd.Series): Low prices
+    close (pd.Series): Close prices
+    length (int): Lookback period for the Stochastic Oscillator (default: 14)
+
+    Returns:
+    pd.Series: Stochastic Oscillator values
+    """
+    # Calculate the highest high over the lookback period
+    highest_high = high.rolling(window=length).max()
+    
+    # Calculate the lowest low over the lookback period
+    lowest_low = low.rolling(window=length).min()
+    
+    # Calculate the Stochastic Oscillator
+    stoch = 100 * ((close - lowest_low) / (highest_high - lowest_low))
+    
+    return stoch
+
 def stoch_rsi(series, length_rsi=14, length_stochrsi=14, k=3, d=3):
     """
     Calculate the Stochastic RSI (SRSI).
@@ -782,6 +904,46 @@ def stoch_rsi(series, length_rsi=14, length_stochrsi=14, k=3, d=3):
     srsi = pd.DataFrame({'fast': k_values, 'slow': d_values})
 
     return srsi
+
+def ultimate_oscillator(high, low, close, short_period=7, medium_period=14, long_period=28):
+    """
+    Calculate the Ultimate Oscillator
+
+    Parameters:
+    high (pd.Series): High prices
+    low (pd.Series): Low prices
+    close (pd.Series): Close prices
+    short_period (int): Look-back period for short-term (default is 7)
+    medium_period (int): Look-back period for medium-term (default is 14)
+    long_period (int): Look-back period for long-term (default is 28)
+
+    Returns:
+    pd.Series: Ultimate Oscillator values
+    """
+    # Calculate True Low (TL) and True High (TH)
+    true_low = pd.concat([low, close.shift(1)], axis=1).min(axis=1)
+    true_high = pd.concat([high, close.shift(1)], axis=1).max(axis=1)
+    
+    # Calculate Buying Pressure (BP)
+    buying_pressure = close - true_low
+    
+    # Calculate True Range (TR)
+    true_range = true_high - true_low
+    
+    # Calculate the average BP and TR for each period
+    avg_bp_short = buying_pressure.rolling(window=short_period).sum()
+    avg_tr_short = true_range.rolling(window=short_period).sum()
+    
+    avg_bp_medium = buying_pressure.rolling(window=medium_period).sum()
+    avg_tr_medium = true_range.rolling(window=medium_period).sum()
+    
+    avg_bp_long = buying_pressure.rolling(window=long_period).sum()
+    avg_tr_long = true_range.rolling(window=long_period).sum()
+    
+    # Calculate the Ultimate Oscillator
+    ult_osc = 100 * ((4 * avg_bp_short / avg_tr_short) + (2 * avg_bp_medium / avg_tr_medium) + (avg_bp_long / avg_tr_long)) / (4 + 2 + 1)
+    
+    return ult_osc
 
 def macd(series, fast=12, slow=26, signal=9):
     """
@@ -1363,6 +1525,40 @@ def Relative_Volume_Signal(data,length=10,limitl=0.9,limith=1.3):
     df['RV'] = relative_volume(df['volume'],length)
     df['Entry'] = df['RV'] > limith
     df['Exit'] = df['RV'] < limitl
+    return df
+
+def chandelier_exit(data, length=22, mult=3.0):
+    df=data.copy()
+    """
+    Calculates the Chandelier Exit indicator using high, low, and close prices.
+
+    Args:
+    data (pd.DataFrame): DataFrame containing 'high', 'low', and 'close' prices.
+    length (int, optional): The period over which the ATR is calculated. Default is 22.
+    mult (float, optional): The multiplier for ATR. Default is 3.0.
+
+    Returns:
+    pd.DataFrame: The input DataFrame with additional columns for Chandelier Exit values, entry, and exit signals.
+    """
+    # Calculate ATR
+    atr_value = atr(df['high'], df['low'], df['close'], period=length)
+
+    long_stop = df['close'].rolling(window=length).max() - atr_value * mult
+    short_stop = df['close'].rolling(window=length).min() + atr_value * mult
+
+    long_stop_prev = long_stop.shift(1)
+    short_stop_prev = short_stop.shift(1)
+
+    condition_long = (df['close'].shift(1) > long_stop_prev) & (df['close'] > short_stop_prev)
+    condition_short = (df['close'].shift(1) < short_stop_prev) & (df['close'] < long_stop_prev)
+
+    direction = np.where(condition_long, 1, np.where(condition_short, -1, np.nan))
+    direction = pd.Series(direction).ffill().bfill().astype(int)
+    df['long_stop'] = long_stop
+    df['short_stop'] = long_stop
+    df['Entry'] = (direction==1)
+    df['Exit'] = (direction==-1)
+
     return df
 
 def Divergence(data,DivCheck,order=3):
